@@ -88,6 +88,71 @@ static uint32_t noise_seed = 0x7EC80000; // Best overall for drums
 #define __fast_mul(a, b) ((a) * (b))
 #endif
 
+// === Target acceleration =====================================================
+// Tuned for the two targets this synth ships on. Every win below is bit-identical
+// to the plain-C fallback for the engine's value ranges, so host output is
+// unchanged (the products never overflow int32, so truncating and high-word
+// multiplies agree).
+//
+//   Cortex-M0+ (RP2040, ARMv6-M): __fast_mul maps to the single-cycle MULS;
+//   every non-power-of-two multiply in the hot path routes through it. There is
+//   no SMULWB/SSAT here (ARMv6-M has neither), so the gain multiply and stereo
+//   clamp use the plain-C fallbacks. The data-dependent ternaries (sine lookup,
+//   clamp) stay as-is: measured against branchless folds they are as fast or
+//   faster on M0+ — the ~1-cycle taken-branch penalty is cheaper than the extra
+//   arithmetic a fold needs.
+//
+//   Cortex-M33 (RP2350 ARM core, ARMv8-M + DSP): the Q16 "multiply then >>16"
+//   gain site uses SMULWB (32x16->32 high word, 1 cyc) instead of MULS+ASR (2),
+//   and the stereo clamp uses SSAT (1 cyc) instead of two compares+branches.
+//   Auto-detected from __ARM_FEATURE_DSP; force with -DMIDI_SYNTH_HAVE_SMULWB=1/0.
+#if !defined(MIDI_SYNTH_HAVE_SMULWB)
+  #if defined(__ARM_FEATURE_DSP)            /* Cortex-M4 / M7 / M33 (+DSP) */
+    #define MIDI_SYNTH_HAVE_SMULWB 1
+  #else
+    #define MIDI_SYNTH_HAVE_SMULWB 0
+  #endif
+#endif
+#if MIDI_SYNTH_HAVE_SMULWB
+  // SMULWB: (Rn * signext(Rm[15:0])) >> 16 in one cycle — the canonical op for a
+  // Q16 "multiply then arithmetic >>16". GCC 15 exposes neither a builtin nor an
+  // arm_acle intrinsic for it (only the accumulate form __builtin_arm_smlawb),
+  // so emit the instruction directly. Bit-identical to (a*b)>>16 whenever b fits
+  // int16 — true here, sine_val is ±32512. SSAT (1-cycle signed-saturate to N
+  // bits) does have a builtin. Both are legal only on DSP targets, which is
+  // exactly what MIDI_SYNTH_HAVE_SMULWB gates, so M0+/host take the fallback.
+  static INLINE int32_t midi_smulwb(int32_t a, int32_t b) {
+      int32_t r;
+      __asm__("smulwb %0, %1, %2" : "=r"(r) : "r"(a), "r"(b));
+      return r;
+  }
+  #define MIDI_MULH_Q16(a, b)  midi_smulwb((int32_t)(a), (int32_t)(b))
+  #define MIDI_SAT_S16(x)      __builtin_arm_ssat((x), 16)
+#else
+  #define MIDI_MULH_Q16(a, b)  ((int32_t) __fast_mul((a), (b)) >> 16)
+  #define MIDI_SAT_S16(x)      (__builtin_expect((x) > 32767, 0) ? 32767 : \
+                                __builtin_expect((x) < -32768, 0) ? -32768 : (x))
+#endif
+
+// Count Trailing Zeros of the (nonzero) active-voice bitmask. The voice loop
+// calls this once per active voice per sample, so the cost matters. On ARMv6-M
+// (Cortex-M0/M0+) __builtin_ctz has no CLZ to lean on and becomes a __ctzsi2
+// libcall (~15-25 cyc + call overhead); a de Bruijn fold is ~7 cyc inline.
+// Everywhere else (M3/M4/M7/M33 have CLZ; host has BSF) the builtin is already
+// 1-2 instructions, so use it. Input MUST be nonzero — the loop returns early
+// when the bitmask is 0, so the contract holds.
+#if defined(__ARM_ARCH_6M__)
+static const uint8_t midi_debruijn_ctz[32] = {
+     0,  1, 28,  2, 29, 14, 24,  3, 30, 22, 20, 15, 25, 17,  4,  8,
+    31, 27, 13, 23, 21, 19, 16,  7, 26, 12, 18,  6, 11,  5, 10,  9
+};
+static INLINE uint32_t midi_ctz32(uint32_t x) {
+    return midi_debruijn_ctz[((uint32_t)(x & (0u - x)) * 0x077CB531U) >> 27];
+}
+#else
+  #define midi_ctz32(x) ((uint32_t) __builtin_ctz(x))
+#endif
+
 static INLINE int32_t sine_mul_q8_i32(int32_t a, uint16_t b) {
     return __fast_mul(a, (int32_t) b) >> 8;
 }
@@ -108,6 +173,14 @@ static INLINE int32_t calc_pitch_bend(const int bend) {
 // Map a 12-bit phase index (0..4095, = one full period) to the quarter-wave
 // table with sign/mirror reconstruction. Returns the Q8 sample (±32512); the
 // melodic path multiplies by velocity then shifts >>8.
+//
+// A nested ternary — kept deliberately. Measured against a branchless quadrant
+// fold (XOR/subtract sign mask), the ternary is faster on BOTH targets (ARM
+// disassembly, -O2): on Cortex-M33 the compiler lowers it to IT-block
+// conditional moves (no real branch) at ~12 cyc vs ~14 for the fold; on M0+ the
+// taken-branch penalty is only ~1 cyc each, while the fold balloons — no UBFX,
+// so every bit-field extract becomes a shift+and chain — to 19 instrs / ~22 cyc
+// flat vs the ternary's 15-25 (avg ~21). Branches are cheap enough here on both.
 static INLINE int32_t sine_from_index(const uint32_t index) {
     return index < 2048
                ? sin16_q8[index < 1024 ? index : 2047 - index]
@@ -174,7 +247,7 @@ static INLINE int32_t generate_drum_sample(midi_voice_t *voice, const uint16_t s
             // lookup produced and not pure sub-bass you can't hear on small speakers.
             uint32_t inc = voice->phase_inc;
             if (sample_position < 512)
-                inc += (voice->phase_inc >> 7) * (uint32_t) (512 - sample_position);
+                inc += __fast_mul(voice->phase_inc >> 7, (uint32_t) (512 - sample_position));
             voice->phase += inc;
             const int32_t tone = sine_from_index(voice->phase >> 20) >> 8; // ±127
 
@@ -258,7 +331,7 @@ static INLINE void midi_sample_stereo(int16_t *out_l, int16_t *out_r) {
     uint32_t active_voices = active_voice_bitmask;
 
     do {
-        const uint32_t voice_index = __builtin_ctz(active_voices);
+        const uint32_t voice_index = midi_ctz32(active_voices);
         const uint32_t voice_bit = 1U << voice_index;
         active_voices ^= voice_bit;
 
@@ -297,7 +370,7 @@ static INLINE void midi_sample_stereo(int16_t *out_l, int16_t *out_r) {
             const int32_t sine_val = sine_from_index(voice->phase >> 20);
             voice->phase += voice->phase_inc;
             voice->gain_q8 += voice->gain_inc;
-            v = __fast_mul(voice->gain_q8, sine_val) >> 16;
+            v = MIDI_MULH_Q16(voice->gain_q8, sine_val);
         }
 
         l += sine_mul_q8_i32(v, voice->pan_l_q8);
@@ -306,12 +379,8 @@ static INLINE void midi_sample_stereo(int16_t *out_l, int16_t *out_r) {
 
     l >>= 2;
     r >>= 2;
-    if (__builtin_expect(l > 32767, 0)) l = 32767;
-    else if (__builtin_expect(l < -32768, 0)) l = -32768;
-    if (__builtin_expect(r > 32767, 0)) r = 32767;
-    else if (__builtin_expect(r < -32768, 0)) r = -32768;
-    *out_l = (int16_t) l;
-    *out_r = (int16_t) r;
+    *out_l = (int16_t) MIDI_SAT_S16(l);
+    *out_r = (int16_t) MIDI_SAT_S16(r);
 }
 
 // Optimized pitch bend calculation with lookup table or approximation
