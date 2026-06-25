@@ -4,6 +4,29 @@ Execute this in the emulator repo by copy/adapting
 `examples/rp2040/general-midi.c.inl` alongside the I2S/DMA and CMake integration.
 The host side (wavetable.c.inl, gm_bank.bin, dls_pack) is done and A/B-validated.
 
+## Synth backend selection (pick one at build time)
+
+The device glue `examples/rp2040/general-midi.c.inl` compiles as one of three
+backends, chosen by a single define. The public API (`parse_midi` / `midi_sample`)
+is identical in all three — see the "Synth Backends" table in
+[README.md](../README.md) and [usage.md](usage.md) §10.
+
+| Define | Engine | Needs a bank? |
+|--------|--------|---------------|
+| *(none)* | wavetable, 16-bit int PCM | yes — v4 bank (~3 MB flash) |
+| `-DWT_PCM_MULAW` | wavetable, 8-bit µ-law PCM | yes — v5 bank (~half the flash) |
+| `-DMIDI_BACKEND_SINE` | bank-free sine + LFSR-noise generator | **no bank** |
+
+`MIDI_BACKEND_SINE` takes precedence when set. Build the packer and the engine
+with the same `WT_PCM_MULAW` setting — the bank's version tag is checked at bind
+time, so a mismatched bank is rejected rather than producing noise.
+
+**Scope of the rest of this document:** the flash/XIP profiling, the `gm_bank.bin`
+pack + `.incbin`, the RAM wave cache, and `midi_cache_release` apply **only to the
+two wavetable backends**. The sine backend carries no bank and no wave cache
+(`midi_cache_release` is a no-op), so Step 1 (pack / `.incbin` / flash size) and
+Step 4 (cache) are N/A for it.
+
 ## Premise (why this list is short)
 
 Target: 400 MHz, 32 voices, 22050 Hz stereo. That is **567 cycles/voice/sample**
@@ -20,9 +43,8 @@ render code from cache and vice-versa. Moving code to RAM removes that contentio
 ## Step 1 — Wire the engine in (DONE in examples/rp2040/general-midi.c.inl)
 
 `examples/rp2040/general-midi.c.inl` drives the wavetable engine and keeps the
-existing `mpu401.c.inl` contract: `parse_midi(midi_command_t*)` (from
-wavetable.c.inl) and a mono `int16_t midi_sample(void)` wrapper over
-`midi_sample_stereo`. It also RAM-places the hot path (Step 2) and binds the bank
+existing `mpu401.c.inl` contract: `parse_midi(midi_command_t*)` and a
+stereo `void midi_sample(int16_t out[2])` wrapper over `midi_sample_stereo`. It also RAM-places the hot path (Step 2) and binds the bank
 via a `constructor` + lazy-init. It needs nothing from the emulator beyond
 `INLINE` (and, optionally, `__not_in_flash_func`), both of which emulator.h
 already provides.
@@ -59,8 +81,8 @@ Notes:
 - Rate: the engine does not resample, so pitch/tempo are correct only when the
   output rate equals the bank's `output_rate`. Repack at your rate when you tune
   it (no code change).
-- For true stereo + DLS pan, switch the emulator's audio mix from `midi_sample()`
-  to `midi_sample_stereo(&l,&r)`.
+- The glue's `midi_sample(int16_t out[2])` already writes a stereo (L,R) pair —
+  feed both halves to your DAC/I²S for true stereo + DLS region pan.
 
 ## Step 2 — RAM-place the hot path (DONE; the #1 win)
 
