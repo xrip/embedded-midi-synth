@@ -14,7 +14,9 @@
 
 #include "dls_parse.c.inl"
 #include "../gm_bank.h"
-#include "../mulaw.h"
+#ifdef WT_PCM_MULAW
+#include "../mulaw.h"   // only the µ-law pack encodes bytes; int16 writes samples directly
+#endif
 
 // ---- growable output buffers -------------------------------------------------
 
@@ -312,7 +314,7 @@ int main(int argc, char **argv) {
     vec_init(&waves, sizeof(gm_wave_t));
     vec_init(&regions, sizeof(gm_region_t));
     vec_init(&instruments, sizeof(gm_instrument_t));
-    vec_init(&pcm, sizeof(uint8_t));   // µ-law: one byte per sample
+    vec_init(&pcm, sizeof(gm_pcm_t));   // int16: 2 bytes/sample, µ-law: 1 byte/sample
 
     // Waves: 1:1 with bank pool indices so region wave_index stays valid.
     for (size_t i = 0; i < bank.wave_count; ++i) {
@@ -331,8 +333,12 @@ int main(int argc, char **argv) {
             double mono = 0.0;
             for (uint16_t ch = 0; ch < w->channels; ++ch) mono += wave_read_channel(w, f, ch);
             mono /= (double) w->channels;
-            uint8_t *s = vec_push(&pcm);
+            gm_pcm_t *s = vec_push(&pcm);
+#ifdef WT_PCM_MULAW
             *s = gm_linear2ulaw(clamp_i16(lrint(mono * 32768.0)));
+#else
+            *s = clamp_i16(lrint(mono * 32768.0));
+#endif
         }
     }
 
@@ -476,7 +482,7 @@ int main(int argc, char **argv) {
     ok &= fwrite(instruments.data, sizeof(gm_instrument_t), instruments.count, f) == instruments.count;
     ok &= fwrite(regions.data, sizeof(gm_region_t), regions.count, f) == regions.count;
     ok &= fwrite(waves.data, sizeof(gm_wave_t), waves.count, f) == waves.count;
-    ok &= fwrite(pcm.data, sizeof(uint8_t), pcm.count, f) == pcm.count;
+    ok &= fwrite(pcm.data, sizeof(gm_pcm_t), pcm.count, f) == pcm.count;
     if (fclose(f) != 0) ok = 0;
 
     print_conn_census();
@@ -510,11 +516,11 @@ int main(int argc, char **argv) {
                 (double) att_min / 655360.0, (double) att_max / 655360.0, att_pos, att_neg, att_sentinel);
     }
 
-    double pcm_mb = (double) (pcm.count * sizeof(uint8_t)) / (1024.0 * 1024.0);
-    double total_mb = (double) (hdr.off_pcm + pcm.count * sizeof(uint8_t)) / (1024.0 * 1024.0);
+    double pcm_mb = (double) (pcm.count * sizeof(gm_pcm_t)) / (1024.0 * 1024.0);
+    double total_mb = (double) (hdr.off_pcm + pcm.count * sizeof(gm_pcm_t)) / (1024.0 * 1024.0);
     fprintf(stderr,
             "GMWB: %u instruments, %u regions (%u without EG1), %u waves (%u at native %u Hz), "
-            "%u µ-law samples (%.2f MB PCM, %.2f MB total) @ %u Hz -> %s\n",
+            "%u samples (%.2f MB PCM, %.2f MB total) @ %u Hz -> %s\n",
             hdr.instrument_count, hdr.region_count, regions_no_eg1, hdr.wave_count, waves_native_rate,
             output_rate, hdr.pcm_samples, pcm_mb, total_mb, output_rate, out_path);
 

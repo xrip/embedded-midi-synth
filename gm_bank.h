@@ -10,10 +10,12 @@
 //    LDR/LDRH, so struct fields are ordered largest-first, every struct size is
 //    a multiple of 4, and the packer aligns each table + the PCM block to 4.
 //    The blob itself must be placed at a 4-byte-aligned flash address.
-//  * PCM is mono 8-bit G.711 µ-law (mulaw.h); sample N is the byte
-//    (pcm_base)[wave.pcm_offset + N], decoded via gm_ulaw2linear / a 256-entry
-//    LUT. Halves the PCM block vs int16 at ~38 dB constant SNR; byte reads are
-//    unaligned-safe so the natural-alignment rule above does not apply to PCM.
+//  * PCM is mono, format chosen at build time via WT_PCM_MULAW (see below):
+//      int16 (default, v4)        sample N is int16 (pcm_base)[wave.pcm_offset + N]
+//      8-bit µ-law (-DWT_PCM_MULAW, v5)  sample N is the byte (pcm_base)[N],
+//        decoded via gm_ulaw2linear / a 256-entry LUT (mulaw.h). Halves the PCM
+//        block at ~38 dB SNR; byte reads are unaligned-safe, so the natural-
+//        alignment rule above does not apply to PCM in this mode.
 #pragma once
 
 #include <stdint.h>
@@ -29,7 +31,21 @@
 #define GM_BANK_MAGIC1 'M'
 #define GM_BANK_MAGIC2 'W'
 #define GM_BANK_MAGIC3 'B'
-#define GM_BANK_VERSION 5u  // v5: PCM block is 8-bit µ-law (was int16); v4 added tremolo + EG2
+// ---- PCM format is selected at build time -----------------------------------
+// The packer and the engine MUST be built with the same setting, otherwise the
+// version tag and the decode path disagree. gm_bank_view() rejects a blob whose
+// version does not match GM_BANK_VERSION, so a mismatched bank fails loudly
+// rather than emitting noise. The sine backend (MIDI_BACKEND_SINE) uses no bank,
+// so this is irrelevant there.
+#ifdef WT_PCM_MULAW
+  #define GM_BANK_VERSION  5u                  // v5: 8-bit µ-law PCM block
+  typedef uint8_t gm_pcm_t;                    // one G.711 µ-law byte per sample
+  #define GM_PCM_BYTES_PER_SAMPLE 1u
+#else
+  #define GM_BANK_VERSION  4u                  // v4: int16 PCM, tremolo + EG2
+  typedef int16_t gm_pcm_t;                    // one int16 sample per frame
+  #define GM_PCM_BYTES_PER_SAMPLE 2u
+#endif
 
 // Fixed-point scales.
 #define GM_Q16 16          // gain, envelope coeffs, sustain: Q16 (65536 = 1.0)
@@ -95,8 +111,8 @@ typedef struct {
     uint32_t off_instruments;   // byte offset to gm_instrument_t[]
     uint32_t off_regions;       // byte offset to gm_region_t[]
     uint32_t off_waves;         // byte offset to gm_wave_t[]
-    uint32_t off_pcm;           // byte offset to µ-law PCM block (4-aligned)
-    uint32_t pcm_samples;       // number of µ-law sample bytes in the PCM block
+    uint32_t off_pcm;           // byte offset to PCM block (4-aligned)
+    uint32_t pcm_samples;       // number of samples (gm_pcm_t units) in the PCM block
 } gm_bank_header_t;             // 44 bytes
 
 _Static_assert(sizeof(gm_wave_t) == 12, "gm_wave_t layout");
@@ -110,7 +126,7 @@ typedef struct {
     const gm_instrument_t  *instruments;
     const gm_region_t      *regions;
     const gm_wave_t        *waves;
-    const uint8_t          *pcm;        // µ-law sample bytes (decode via gm_ulaw2linear)
+    const gm_pcm_t        *pcm;        // int16 or µ-law bytes, per WT_PCM_MULAW
 } gm_bank_view_t;
 
 static inline int gm_bank_view(const void *blob, gm_bank_view_t *out) {
@@ -125,6 +141,6 @@ static inline int gm_bank_view(const void *blob, gm_bank_view_t *out) {
     out->instruments = (const gm_instrument_t *) (base + h->off_instruments);
     out->regions = (const gm_region_t *) (base + h->off_regions);
     out->waves = (const gm_wave_t *) (base + h->off_waves);
-    out->pcm = (const uint8_t *) (base + h->off_pcm);
+    out->pcm = (const gm_pcm_t *) (base + h->off_pcm);
     return 1;
 }

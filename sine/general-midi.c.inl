@@ -1,6 +1,7 @@
 #pragma GCC optimize("Ofast")
 #pragma once
 #include "general-midi.h"
+#include <string.h>   // memset (voice/channel reset); self-contained for embedding
 
 // #define DEBUG_MIDI
 

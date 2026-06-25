@@ -1,25 +1,59 @@
 #pragma GCC optimize("Ofast")
 #pragma once
 //
-// General MIDI synthesizer — GM.DLS fixed-point wavetable engine.
+// General MIDI synthesizer — single device include point.
 //
-// Replaces the old synthesized voices (sine + LFSR noise) with the real GM.DLS
-// wavetable bank. All the DSP lives in wavetable.c.inl (float-free, Cortex-M0+
-// tuned: no int64/division on the per-sample path, baked LUTs, voice bitmask).
-// This file is only the glue mpu401.c.inl / the emulator expect:
+// Pick the synth backend with ONE compile-time define. The public contract is
+// the same either way — what mpu401.c.inl / the emulator call never changes:
 //
-//   * void    parse_midi(const midi_command_t *)   - from wavetable.c.inl
-//   * int16_t midi_sample(void)                     - mono wrapper, defined here
+//   * void parse_midi(const midi_command_t *)
+//   * void midi_sample(int16_t out[2])           stereo render (L,R)
+//   * void midi_cache_release(void)              drop RAM cache (no-op on sine)
 //
-// Provided by the includer (emulator.h): INLINE, and optionally
-// __not_in_flash_func (RAM-places the hot path; big win since the 16 KB XIP
-// cache is shared between code and the flash-resident PCM).
+// Backends:
+//   (default)          GM.DLS/GUS wavetable, 16-bit PCM (best quality).
+//                      Needs a v4 gm_bank.bin (dls_pack / gus_pack, no define).
+//   -DWT_PCM_MULAW     wavetable, 8-bit µ-law PCM (~half the flash, ~38 dB SNR).
+//                      Needs a v5 bank (pack with -DWT_PCM_MULAW).
+//   -DMIDI_BACKEND_SINE  bank-free sine + LFSR-noise generator (smallest; no bank).
 //
-// The packed bank is embedded in flash by gm_bank.S (.incbin gm_bank.bin) and
-// must be generated for the output rate:  dls_pack gm.dls gm_bank.bin <rate>.
-// The engine does NOT resample to SOUND_FREQUENCY — pack the bank at the actual
-// playback rate (default 22050) or pitch/tempo will be off. See
-// docs/device-integration.md.
+// MIDI_BACKEND_SINE takes precedence when set. WT_PCM_MULAW affects only the
+// wavetable backend (the sine backend has no PCM, so it is ignored there).
+//
+// Provided by the includer (emulator.h): INLINE, and (sine backend)
+// SOUND_FREQUENCY + __not_in_flash; optionally __not_in_flash_func to RAM-place
+// the wavetable hot path (big win: the 16 KB XIP cache is shared between code
+// and the flash-resident PCM). midi_selfcheck.c / sine_render.c show host stubs.
+
+// ============================================================================
+// Backend 3 — sine / noise generator (no sound bank)
+// ============================================================================
+#ifdef MIDI_BACKEND_SINE
+
+#ifndef SOUND_FREQUENCY
+#define SOUND_FREQUENCY 22050          // the sine pitch tables are baked for this
+#endif
+#ifndef __fast_mul
+#define __fast_mul(a, b) ((a) * (b))   // device maps this to a single-cycle MUL
+#endif
+
+// The sine engine writes `static INLINE ...` (with a leading `static`), so it uses
+// the includer's INLINE as-is (emulator.h / midi_selfcheck define INLINE = inline).
+// Do NOT bridge it to `static inline` here — unlike wavetable.c.inl below, which
+// writes `INLINE foo` (no leading static) and therefore needs that bridge.
+#include "../../sine/general-midi.c.inl"   // parse_midi, midi_sample_stereo, midi_command_t
+
+// No bank to embed and no RAM wave cache: keep the two public entry points so the
+// consumer links unchanged under either backend.
+static INLINE void midi_sample(int16_t samles[2]) {
+    midi_sample_stereo(&samles[0], &samles[1]);
+}
+void midi_cache_release(void) { /* no-op: the sine backend has no wave cache */ }
+
+// ============================================================================
+// Backends 1 & 2 — GM.DLS/GUS wavetable (16-bit int16, or 8-bit µ-law)
+// ============================================================================
+#else
 
 #include "../../gm_bank.h"
 
@@ -51,10 +85,11 @@
 #pragma pop_macro("INLINE")
 
 // Embed the packed soundbank in flash via inline-asm .incbin. Generate it first
-// (dls_pack gm.dls gm_bank.bin <rate>) and make it reachable by the assembler
-// (e.g. -Wa,-I<dir> on this TU, or an absolute path below). Define WT_BANK_EXTERN
-// to skip the embed and supply gm_bank_blob yourself (host self-check, a separate
-// .S/.c, etc.). See docs/device-integration.md.
+// (dls_pack/gus_pack) and make it reachable by the assembler (e.g. -Wa,-I<dir>
+// on this TU, or an absolute path below). Define WT_BANK_EXTERN to skip the embed
+// and supply gm_bank_blob yourself (host self-check, a separate .S/.c, etc.). The
+// bank's PCM format (v4 int16 / v5 µ-law) MUST match this TU's WT_PCM_MULAW
+// setting — gm_bank_view() rejects a mismatched version. See docs/device-integration.md.
 #ifndef WT_BANK_EXTERN
 #define IMPORT_BIN(file, sym) asm (\
     ".section .rodata." #sym "\n"           /* own rodata subsection (flash) */\
@@ -80,17 +115,13 @@ static void __attribute__((constructor)) gm_wavetable_init(void) {
     wt_bank_ready = 1;
 }
 
-// Mono sink kept for the current caller: sum the stereo render back to center.
-// For true stereo + DLS pan, switch the emulator's audio mix to
-// midi_sample_stereo(&l, &r).
+// Stereo render. For a mono sink, mix to center: ((int32_t)l + r) >> 1.
 static INLINE void midi_sample(int16_t samles[2]) {
     if (__builtin_expect(!wt_bank_ready, 0)) {
         wt_set_bank(gm_bank_blob);
         wt_bank_ready = 1;
     }
-    // int16_t l, r;
     midi_sample_stereo(&samles[0], &samles[1]);
-    // return (int16_t) (((int32_t) l + (int32_t) r) >> 1);
 }
 // Hand all the wave cache's RAM back to the heap when another subsystem needs it.
 // MIDI keeps playing (voices on a RAM copy fall back to the byte-identical flash
@@ -101,3 +132,5 @@ static INLINE void midi_sample(int16_t samles[2]) {
 void midi_cache_release(void) {
     wt_cache_release();
 }
+
+#endif // MIDI_BACKEND_SINE

@@ -149,7 +149,7 @@ int main(int argc, char **argv) {
     {
         uint32_t kb = 0; int n = 0;
         for (int i = 0; i < WT_WAVE_CACHE_SLOTS; ++i)
-            if (g_wave_ram[i]) { ++n; kb += g_bank.waves[i].frame_count * 2u / 1024; }
+            if (g_wave_ram[i]) { ++n; kb += g_bank.waves[i].frame_count * GM_PCM_BYTES_PER_SAMPLE / 1024; }
         fprintf(stderr, "WAVECACHE resident=%uKB in %d waves (end-of-render)\n", kb, n);
     }
 #ifdef WT_WAVE_CACHE_PROFILE

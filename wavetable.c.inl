@@ -33,7 +33,9 @@
 
 #include <stdint.h>
 #include <string.h>
-#include "mulaw.h"   // µ-law PCM codec (decode LUT); single source shared with the packer
+#ifdef WT_PCM_MULAW
+#include "mulaw.h"   // µ-law PCM codec (decode LUT); shared with the packer
+#endif
 #ifdef WT_RUNTIME_LUTS
 #include <math.h>   // only the reference LUT build needs libm; baked build does not
 #ifndef M_PI
@@ -130,7 +132,7 @@ typedef struct {
     uint8_t  key_group;
     uint8_t  amp_stage;
 
-    const uint8_t *pcm;       // wave µ-law PCM base (g_bank.pcm + wave->pcm_offset)
+    const gm_pcm_t *pcm;      // wave PCM base (g_bank.pcm + wave->pcm_offset)
     uint32_t frame_count;
     uint32_t loop_start;
     uint32_t loop_end;        // loop_start + loop_length
@@ -227,7 +229,7 @@ static inline int wt_ctz32(uint32_t x) {  // x must be non-zero
 #ifndef WT_WAVE_CACHE_SLOTS
 #define WT_WAVE_CACHE_SLOTS 512    // wave-pointer table size; >= the bank's wave_count
 #endif
-static uint8_t *g_wave_ram[WT_WAVE_CACHE_SLOTS];   // RAM copy per wave_index (NULL = flash)
+static gm_pcm_t *g_wave_ram[WT_WAVE_CACHE_SLOTS];   // RAM copy per wave_index (NULL = flash)
 static uint32_t g_wave_age[WT_WAVE_CACHE_SLOTS];   // g_next_age at last use (LRU key)
 #ifdef WT_WAVE_CACHE_PROFILE
 static uint64_t g_pcm_ram_reads, g_pcm_flash_reads;          // host-only per-sample tally
@@ -258,16 +260,16 @@ static int wt_cache_evict(void) {
     return 1;
 }
 
-static const uint8_t *wt_wave_base(wt_voice_t *v, const gm_wave_t *w, int looped) {
-    const uint8_t *flash = g_bank.pcm + w->pcm_offset;
+static const gm_pcm_t *wt_wave_base(wt_voice_t *v, const gm_wave_t *w, int looped) {
+    const gm_pcm_t *flash = g_bank.pcm + w->pcm_offset;
     uint16_t wi = v->wave_index;
     if (!looped || wi >= WT_WAVE_CACHE_SLOTS) return flash;     // one-shot / out of table
     if (g_wave_ram[wi]) { g_wave_age[wi] = g_next_age; return g_wave_ram[wi]; }  // resident
-    uint32_t bytes = w->frame_count;   // µ-law: one byte per sample
-    uint8_t *ram = (uint8_t *) malloc(bytes);
+    uint32_t bytes = w->frame_count * GM_PCM_BYTES_PER_SAMPLE;   // int16: 2 bytes, µ-law: 1
+    gm_pcm_t *ram = (gm_pcm_t *) malloc(bytes);
     while (!ram) {                                              // heap full -> shed our own waves
         if (!wt_cache_evict()) return flash;
-        ram = (uint8_t *) malloc(bytes);
+        ram = (gm_pcm_t *) malloc(bytes);
     }
     memcpy(ram, flash, bytes);
     g_wave_ram[wi] = ram;
@@ -338,10 +340,13 @@ static void wt_build_luts(void) {
 static void wt_build_luts(void) {}
 #endif
 
+#ifdef WT_PCM_MULAW
 // µ-law sample decode LUT: pcm byte -> int16. Built once from the integer codec
-// (no float/libm), keep it in RAM on device (the audio loop does two loads per
+// (no float/libm), kept in RAM on device (the audio loop does two loads per
 // voice per sample through it). The hot path reads wt_ulaw_lut[v->pcm[i]].
+// int16 banks (no WT_PCM_MULAW) skip this: pcm[i] is the sample already.
 static int16_t wt_ulaw_lut[256];
+#endif
 
 static void wt_engine_reset(void) {
     memset(g_voices, 0, sizeof(g_voices));
@@ -367,7 +372,9 @@ static void wt_engine_reset(void) {
 static void wt_set_bank(const void *blob) {
     gm_bank_view(blob, &g_bank);
     wt_build_luts();
+#ifdef WT_PCM_MULAW
     gm_ulaw_build_lut(wt_ulaw_lut);   // µ-law decode table for the audio loop
+#endif
     wt_engine_reset();
 }
 
@@ -864,9 +871,15 @@ INLINE void WT_RAMFUNC(midi_sample_stereo)(int16_t *out_l, int16_t *out_r) {
         else g_pcm_ram_reads++;    // a malloc'd RAM copy
 #endif
         uint32_t i0 = v->frame_pos;
+#ifdef WT_PCM_MULAW
         int32_t s0 = wt_ulaw_lut[v->pcm[i0]];          // µ-law byte -> int16 via LUT
         uint32_t i1 = i0 + 1;
         int32_t s1 = (i1 < v->frame_count) ? wt_ulaw_lut[v->pcm[i1]] : s0;
+#else
+        int32_t s0 = v->pcm[i0];                       // int16 sample, read directly
+        uint32_t i1 = i0 + 1;
+        int32_t s1 = (i1 < v->frame_count) ? v->pcm[i1] : s0;
+#endif
         int32_t s = wt_lerp_q15_i32(s0, s1, v->frac);
 
         // env<=65536, amp<=65535 -> product < 2^32 (single unsigned MUL); the
