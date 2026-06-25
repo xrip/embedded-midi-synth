@@ -319,10 +319,22 @@ static INLINE int32_t apply_pitch(const int32_t base_frequency, const int32_t ce
     return __builtin_expect(cents == 0, 1) ? base_frequency : (base_frequency * cents + 5000) / 10000;
 }
 
-static INLINE uint8_t melodic_velocity(uint8_t channel, uint8_t velocity) {
+// Key-tracking amplitude: a pure sine concentrates all its energy at the
+// fundamental, so low notes read far louder than mid/high ones (measured +4..+8
+// dB vs a harmonic reference on the same MIDI). Trim the low range to match.
+// Flat above MIDI 60 (C4), linear ramp to x0.4 (-8 dB) at MIDI 24 and below.
+// Q8, 256 = unity. Control-rate only (note-on / volume-CC), never per-sample.
+static INLINE uint16_t note_gain_q8(const uint8_t note) {
+    if (note >= 60) return 256u;
+    if (note <= 24) return 102u;                                   // 0.40 (-8 dB)
+    return (uint16_t) (102u + ((uint32_t) (note - 24) * (256u - 102u)) / (60u - 24u));
+}
+
+static INLINE uint8_t melodic_velocity(uint8_t channel, uint8_t note, uint8_t velocity) {
     const gm_envelope_t *env = &gm_envelopes[midi_channels[channel].program];
     uint16_t v = ((uint16_t) midi_channels[channel].volume * velocity) >> 7;
     v = (v * env->gain) >> 7;
+    v = (v * note_gain_q8(note)) >> 8;                             // key-tracking bass trim
     return v > 255 ? 255 : (uint8_t) v;
 }
 
@@ -375,7 +387,7 @@ static INLINE void parse_midi(const midi_command_t *message) {
 
                         voice->velocity = (channel == 9)
                                           ? (uint8_t) (((uint16_t) midi_channels[channel].volume * message->velocity) >> 7)
-                                          : melodic_velocity(channel, message->velocity);
+                                          : melodic_velocity(channel, message->note, message->velocity);
 
                         // Percussion (channel 9): seed the exponential drum
                         // envelope and pick the per-type decay rate. The melodic
@@ -452,7 +464,7 @@ static INLINE void parse_midi(const midi_command_t *message) {
                         if (midi_voices[voice_slot].channel == channel) {
                             const uint8_t new_vel = (channel == 9)
                                                     ? (uint8_t) (((uint16_t) message->velocity * midi_voices[voice_slot].velocity_base) >> 7)
-                                                    : melodic_velocity(channel, midi_voices[voice_slot].velocity_base);
+                                                    : melodic_velocity(channel, midi_voices[voice_slot].note, midi_voices[voice_slot].velocity_base);
                             midi_voices[voice_slot].velocity = new_vel;
                             if (midi_voices[voice_slot].attack_target)
                                 midi_voices[voice_slot].attack_target = new_vel;
