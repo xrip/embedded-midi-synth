@@ -6,19 +6,19 @@
 // test.
 //
 //   wavetable (16-bit):   powershell -File build.ps1 -Target midi_selfcheck
-//   wavetable (µ-law):    powershell -File build.ps1 -Target midi_selfcheck -Define WT_PCM_MULAW
-//   sine backend:         powershell -File build.ps1 -Target midi_selfcheck -Define MIDI_BACKEND_SINE
+//   wavetable (µ-law):    powershell -File build.ps1 -Target midi_selfcheck -Define MIDI_SYNTH_MULAW
+//   sine backend:         powershell -File build.ps1 -Target midi_selfcheck -Define MIDI_SYNTH_SINE
 #include <stdint.h>
 
 #define INLINE inline           // emulator convention: code writes `static INLINE`
 #define SOUND_FREQUENCY 22050
 #define __not_in_flash(x)       // sine-backend table attribute; no-op on host
-#ifndef MIDI_BACKEND_SINE
+#ifndef MIDI_SYNTH_SINE
 #define WT_BANK_EXTERN          // skip the .incbin embed; supply a stub bank below
 #endif
 #include "../examples/rp2040/general-midi.c.inl"
 
-#ifndef MIDI_BACKEND_SINE
+#ifndef MIDI_SYNTH_SINE
 // Stand-in for the embedded bank so the link resolves without the multi-MB file.
 const uint8_t gm_bank_blob[64] = {0};
 #endif

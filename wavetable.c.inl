@@ -33,7 +33,7 @@
 
 #include <stdint.h>
 #include <string.h>
-#ifdef WT_PCM_MULAW
+#ifdef MIDI_SYNTH_MULAW
 #include "mulaw.h"   // µ-law PCM codec (decode LUT); shared with the packer
 #endif
 #ifdef WT_RUNTIME_LUTS
@@ -340,11 +340,11 @@ static void wt_build_luts(void) {
 static void wt_build_luts(void) {}
 #endif
 
-#ifdef WT_PCM_MULAW
+#ifdef MIDI_SYNTH_MULAW
 // µ-law sample decode LUT: pcm byte -> int16. Built once from the integer codec
 // (no float/libm), kept in RAM on device (the audio loop does two loads per
 // voice per sample through it). The hot path reads wt_ulaw_lut[v->pcm[i]].
-// int16 banks (no WT_PCM_MULAW) skip this: pcm[i] is the sample already.
+// int16 banks (no MIDI_SYNTH_MULAW) skip this: pcm[i] is the sample already.
 static int16_t wt_ulaw_lut[256];
 #endif
 
@@ -372,7 +372,7 @@ static void wt_engine_reset(void) {
 static void wt_set_bank(const void *blob) {
     gm_bank_view(blob, &g_bank);
     wt_build_luts();
-#ifdef WT_PCM_MULAW
+#ifdef MIDI_SYNTH_MULAW
     gm_ulaw_build_lut(wt_ulaw_lut);   // µ-law decode table for the audio loop
 #endif
     wt_engine_reset();
@@ -871,7 +871,7 @@ INLINE void WT_RAMFUNC(midi_sample_stereo)(int16_t *out_l, int16_t *out_r) {
         else g_pcm_ram_reads++;    // a malloc'd RAM copy
 #endif
         uint32_t i0 = v->frame_pos;
-#ifdef WT_PCM_MULAW
+#ifdef MIDI_SYNTH_MULAW
         int32_t s0 = wt_ulaw_lut[v->pcm[i0]];          // µ-law byte -> int16 via LUT
         uint32_t i1 = i0 + 1;
         int32_t s1 = (i1 < v->frame_count) ? wt_ulaw_lut[v->pcm[i1]] : s0;

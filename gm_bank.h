@@ -10,9 +10,9 @@
 //    LDR/LDRH, so struct fields are ordered largest-first, every struct size is
 //    a multiple of 4, and the packer aligns each table + the PCM block to 4.
 //    The blob itself must be placed at a 4-byte-aligned flash address.
-//  * PCM is mono, format chosen at build time via WT_PCM_MULAW (see below):
+//  * PCM is mono, format chosen at build time via MIDI_SYNTH_MULAW (see below):
 //      int16 (default, v4)        sample N is int16 (pcm_base)[wave.pcm_offset + N]
-//      8-bit µ-law (-DWT_PCM_MULAW, v5)  sample N is the byte (pcm_base)[N],
+//      8-bit µ-law (-DMIDI_SYNTH_MULAW, v5)  sample N is the byte (pcm_base)[N],
 //        decoded via gm_ulaw2linear / a 256-entry LUT (mulaw.h). Halves the PCM
 //        block at ~38 dB SNR; byte reads are unaligned-safe, so the natural-
 //        alignment rule above does not apply to PCM in this mode.
@@ -35,9 +35,9 @@
 // The packer and the engine MUST be built with the same setting, otherwise the
 // version tag and the decode path disagree. gm_bank_view() rejects a blob whose
 // version does not match GM_BANK_VERSION, so a mismatched bank fails loudly
-// rather than emitting noise. The sine backend (MIDI_BACKEND_SINE) uses no bank,
+// rather than emitting noise. The sine backend (MIDI_SYNTH_SINE) uses no bank,
 // so this is irrelevant there.
-#ifdef WT_PCM_MULAW
+#ifdef MIDI_SYNTH_MULAW
   #define GM_BANK_VERSION  5u                  // v5: 8-bit µ-law PCM block
   typedef uint8_t gm_pcm_t;                    // one G.711 µ-law byte per sample
   #define GM_PCM_BYTES_PER_SAMPLE 1u
@@ -126,7 +126,7 @@ typedef struct {
     const gm_instrument_t  *instruments;
     const gm_region_t      *regions;
     const gm_wave_t        *waves;
-    const gm_pcm_t        *pcm;        // int16 or µ-law bytes, per WT_PCM_MULAW
+    const gm_pcm_t        *pcm;        // int16 or µ-law bytes, per MIDI_SYNTH_MULAW
 } gm_bank_view_t;
 
 static inline int gm_bank_view(const void *blob, gm_bank_view_t *out) {

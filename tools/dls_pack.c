@@ -14,7 +14,7 @@
 
 #include "dls_parse.c.inl"
 #include "../gm_bank.h"
-#ifdef WT_PCM_MULAW
+#ifdef MIDI_SYNTH_MULAW
 #include "../mulaw.h"   // only the µ-law pack encodes bytes; int16 writes samples directly
 #endif
 
@@ -334,7 +334,7 @@ int main(int argc, char **argv) {
             for (uint16_t ch = 0; ch < w->channels; ++ch) mono += wave_read_channel(w, f, ch);
             mono /= (double) w->channels;
             gm_pcm_t *s = vec_push(&pcm);
-#ifdef WT_PCM_MULAW
+#ifdef MIDI_SYNTH_MULAW
             *s = gm_linear2ulaw(clamp_i16(lrint(mono * 32768.0)));
 #else
             *s = clamp_i16(lrint(mono * 32768.0));

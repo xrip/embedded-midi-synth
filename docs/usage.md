@@ -29,7 +29,7 @@ Two layers, use whichever fits:
 | Layer | File | What it gives you |
 |-------|------|-------------------|
 | **Engine** | `wavetable.c.inl` | The synth itself: `parse_midi`, `midi_sample_stereo`, bank binding. Portable, no platform assumptions. |
-| **Glue (optional)** | `examples/rp2040/general-midi.c.inl` | A ready-made single include point: embeds the bank, runs init, exposes `midi_sample(int16_t out[2])` + `midi_cache_release()`, and dispatches between the wavetable and sine engines via `MIDI_BACKEND_SINE`. A convenience/example, not required. |
+| **Glue (optional)** | `examples/rp2040/general-midi.c.inl` | A ready-made single include point: embeds the bank, runs init, exposes `midi_sample(int16_t out[2])` + `midi_cache_release()`, and dispatches between the wavetable and sine engines via `MIDI_SYNTH_SINE`. A convenience/example, not required. |
 
 ---
 
@@ -312,8 +312,8 @@ yield.
 | `WT_MIDI_COMMAND_T_DEFINED` | unset | Supply your own `midi_command_t` type. |
 | `WT_RAMFUNC(fn)` | identity | Hook to place the hot functions in fast memory on MCUs. |
 | `WT_RUNTIME_LUTS` | unset | Build the math tables at startup instead of using the baked ones (needs libm; for validation only). |
-| `WT_PCM_MULAW` | unset | Store/decode the bank's PCM as 8-bit G.711 µ-law instead of int16 (emits/expects a **v5** bank; ~half the PCM bytes at ~38 dB SNR). The packer and the engine **must** be built with the same setting — `gm_bank_view()` rejects a version mismatch. |
-| `MIDI_BACKEND_SINE` | unset | Select the bank-free `sine/` generator engine (sine table + LFSR noise) instead of the wavetable engine. Takes precedence over `WT_PCM_MULAW` (no bank, no cache). The glue `examples/rp2040/general-midi.c.inl` switches on this for you. |
+| `MIDI_SYNTH_MULAW` | unset | Store/decode the bank's PCM as 8-bit G.711 µ-law instead of int16 (emits/expects a **v5** bank; ~half the PCM bytes at ~38 dB SNR). The packer and the engine **must** be built with the same setting — `gm_bank_view()` rejects a version mismatch. |
+| `MIDI_SYNTH_SINE` | unset | Select the bank-free `sine/` generator engine (sine table + LFSR noise) instead of the wavetable engine. Takes precedence over `MIDI_SYNTH_MULAW` (no bank, no cache). The glue `examples/rp2040/general-midi.c.inl` switches on this for you. |
 
 ---
 

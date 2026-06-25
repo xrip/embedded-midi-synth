@@ -13,11 +13,11 @@
 // Backends:
 //   (default)          GM.DLS/GUS wavetable, 16-bit PCM (best quality).
 //                      Needs a v4 gm_bank.bin (dls_pack / gus_pack, no define).
-//   -DWT_PCM_MULAW     wavetable, 8-bit µ-law PCM (~half the flash, ~38 dB SNR).
-//                      Needs a v5 bank (pack with -DWT_PCM_MULAW).
-//   -DMIDI_BACKEND_SINE  bank-free sine + LFSR-noise generator (smallest; no bank).
+//   -DMIDI_SYNTH_MULAW     wavetable, 8-bit µ-law PCM (~half the flash, ~38 dB SNR).
+//                      Needs a v5 bank (pack with -DMIDI_SYNTH_MULAW).
+//   -DMIDI_SYNTH_SINE  bank-free sine + LFSR-noise generator (smallest; no bank).
 //
-// MIDI_BACKEND_SINE takes precedence when set. WT_PCM_MULAW affects only the
+// MIDI_SYNTH_SINE takes precedence when set. MIDI_SYNTH_MULAW affects only the
 // wavetable backend (the sine backend has no PCM, so it is ignored there).
 //
 // Provided by the includer (emulator.h): INLINE, and (sine backend)
@@ -28,7 +28,7 @@
 // ============================================================================
 // Backend 3 — sine / noise generator (no sound bank)
 // ============================================================================
-#ifdef MIDI_BACKEND_SINE
+#ifdef MIDI_SYNTH_SINE
 
 #ifndef SOUND_FREQUENCY
 #define SOUND_FREQUENCY 22050          // the sine pitch tables are baked for this
@@ -88,7 +88,7 @@ void midi_cache_release(void) { /* no-op: the sine backend has no wave cache */ 
 // (dls_pack/gus_pack) and make it reachable by the assembler (e.g. -Wa,-I<dir>
 // on this TU, or an absolute path below). Define WT_BANK_EXTERN to skip the embed
 // and supply gm_bank_blob yourself (host self-check, a separate .S/.c, etc.). The
-// bank's PCM format (v4 int16 / v5 µ-law) MUST match this TU's WT_PCM_MULAW
+// bank's PCM format (v4 int16 / v5 µ-law) MUST match this TU's MIDI_SYNTH_MULAW
 // setting — gm_bank_view() rejects a mismatched version. See docs/device-integration.md.
 #ifndef WT_BANK_EXTERN
 #define IMPORT_BIN(file, sym) asm (\
@@ -133,4 +133,4 @@ void midi_cache_release(void) {
     wt_cache_release();
 }
 
-#endif // MIDI_BACKEND_SINE
+#endif // MIDI_SYNTH_SINE

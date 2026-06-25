@@ -3,13 +3,13 @@
 //   gus_pack <timidity.cfg> <out.bin> <output_rate>
 //
 // Produces the same GMWB blob as dls_pack (int16, or 8-bit µ-law with
-// -DWT_PCM_MULAW), without changing the runtime synth. This is intentionally a
+// -DMIDI_SYNTH_MULAW), without changing the runtime synth. This is intentionally a
 // dgguspat-oriented MVP, not a full TiMidity or UltraMID emulator.
 #include <math.h>
 
 #include "gus_parse.c.inl"
 #include "../gm_bank.h"
-#ifdef WT_PCM_MULAW
+#ifdef MIDI_SYNTH_MULAW
 #include "../mulaw.h"
 #endif
 
@@ -132,7 +132,7 @@ static uint32_t append_wave(const gus_sample_t *sm, uint32_t output_rate, vec_t 
             v = is_unsigned ? ((long) b - 128L) << 8 : ((int8_t) b) << 8;
         }
         gm_pcm_t *dst = vec_push(pcm);
-#ifdef WT_PCM_MULAW
+#ifdef MIDI_SYNTH_MULAW
         *dst = gm_linear2ulaw(clamp_i16(v));
 #else
         *dst = clamp_i16(v);

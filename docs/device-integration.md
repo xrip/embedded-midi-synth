@@ -14,11 +14,11 @@ is identical in all three — see the "Synth Backends" table in
 | Define | Engine | Needs a bank? |
 |--------|--------|---------------|
 | *(none)* | wavetable, 16-bit int PCM | yes — v4 bank (~3 MB flash) |
-| `-DWT_PCM_MULAW` | wavetable, 8-bit µ-law PCM | yes — v5 bank (~half the flash) |
-| `-DMIDI_BACKEND_SINE` | bank-free sine + LFSR-noise generator | **no bank** |
+| `-DMIDI_SYNTH_MULAW` | wavetable, 8-bit µ-law PCM | yes — v5 bank (~half the flash) |
+| `-DMIDI_SYNTH_SINE` | bank-free sine + LFSR-noise generator | **no bank** |
 
-`MIDI_BACKEND_SINE` takes precedence when set. Build the packer and the engine
-with the same `WT_PCM_MULAW` setting — the bank's version tag is checked at bind
+`MIDI_SYNTH_SINE` takes precedence when set. Build the packer and the engine
+with the same `MIDI_SYNTH_MULAW` setting — the bank's version tag is checked at bind
 time, so a mismatched bank is rejected rather than producing noise.
 
 **Scope of the rest of this document:** the flash/XIP profiling, the `gm_bank.bin`
