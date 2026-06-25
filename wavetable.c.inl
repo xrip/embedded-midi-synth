@@ -54,6 +54,27 @@
 #define __fast_mul(a, b) ((a) * (b))
 #endif
 
+// Q16 high-half multiply, target-accelerated. On Cortex-M33 (and any ARM with
+// __ARM_FEATURE_DSP) this is SMULWB: (Rn * sext(Rm[15:0])) >> 16 in 1 cycle,
+// replacing MUL+ASR (2 cycles). SMULWB reads only the LOW 16 bits of its SECOND
+// operand, so WT_MULH_Q16(a, b) REQUIRES b to fit in int16 (|b| <= 32767); every
+// call site below guarantees that (the interpolated sample s, and the constant
+// 29491). In that range it is bit-identical to (a*b)>>16. On Cortex-M0+ (no DSP)
+// and the host it falls back to __fast_mul + shift. NOTE: arm_acle.h (gcc 15) has
+// no SMULWB intrinsic/builtin, so this is inline asm; __SMULWB is a CMSIS name.
+#if defined(__ARM_FEATURE_DSP) && __ARM_FEATURE_DSP
+  #define WT_HAVE_SMULWB 1
+  static inline int32_t wt_smulwb(int32_t a, int32_t b) {
+      int32_t r;
+      __asm__("smulwb %0, %1, %2" : "=r"(r) : "r"(a), "r"(b));
+      return r;
+  }
+  #define WT_MULH_Q16(a, b)  wt_smulwb((int32_t)(a), (int32_t)(b))
+#else
+  #define WT_HAVE_SMULWB 0
+  #define WT_MULH_Q16(a, b)  ((int32_t) __fast_mul((a), (b)) >> 16)
+#endif
+
 static inline int32_t wt_mul_i32(int32_t a, int32_t b) {
     return __fast_mul(a, b);
 }
@@ -883,9 +904,11 @@ INLINE void WT_RAMFUNC(midi_sample_stereo)(int16_t *out_l, int16_t *out_r) {
         int32_t s = wt_lerp_q15_i32(s0, s1, v->frac);
 
         // env<=65536, amp<=65535 -> product < 2^32 (single unsigned MUL); the
-        // resulting gain<=65535, so s (<=32767) * gain stays inside int32.
+        // resulting gain<=65535, so s (<=32767) * gain stays inside int32. s fits
+        // int16 (lerp stays in the convex hull of s0,s1), so WT_MULH_Q16(gain, s)
+        // maps to SMULWB on Cortex-M33 (1 cycle); gain is the full-range operand.
         int32_t gain = (int32_t) wt_mul_q16_u32((uint32_t) v->env_q16, (uint32_t) v->render_amp_q16); // Q16
-        int32_t val = wt_mul_q16_i32(s, gain);
+        int32_t val = WT_MULH_Q16(gain, s);
 
         l += wt_mul_q15_i32(val, v->pan_l_q15);
         r += wt_mul_q15_i32(val, v->pan_r_q15);
@@ -905,11 +928,12 @@ INLINE void WT_RAMFUNC(midi_sample_stereo)(int16_t *out_l, int16_t *out_r) {
     // Master gain ~0.45 (29491/65536). Clamp the accumulator BEFORE the gain
     // multiply so it stays a single 32x32->32 mul (no __aeabi_lmul on M0):
     // 72818 * 29491 = 2147475638 < INT32_MAX, and >>16 spans exactly the full
-    // int16 range, so no post-clamp is needed.
+    // int16 range, so no post-clamp is needed. 29491 fits int16, so on Cortex-M33
+    // each mul is SMULWB (1 cycle) via WT_MULH_Q16.
     if (l > 72818) l = 72818; else if (l < -72818) l = -72818;
     if (r > 72818) r = 72818; else if (r < -72818) r = -72818;
-    *out_l = (int16_t) wt_mul_q16_i32(l, 29491);
-    *out_r = (int16_t) wt_mul_q16_i32(r, 29491);
+    *out_l = (int16_t) WT_MULH_Q16(l, 29491);
+    *out_r = (int16_t) WT_MULH_Q16(r, 29491);
 }
 
 INLINE int wt_has_active_voices(void) {
