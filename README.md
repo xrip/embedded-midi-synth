@@ -36,6 +36,7 @@ plain single-translation-unit C and only needs a pointer to a packed bank blob.
 | `tools/dls_pack.c` | Host tool: converts a RIFF DLS bank into the packed runtime blob. |
 | `tools/gus_pack.c` | Host tool: converts a simple TiMidity/GUS patch set into the same packed runtime blob. |
 | `examples/wt_render.c` | Host renderer for validating the fixed-point engine against a packed bank. |
+| `examples/sine_render.c` | Host renderer for the bank-free sine generator (no sound bank needed). |
 | `examples/rp2040/` | Optional glue for an existing RP2040/emulator integration. |
 | `docs/usage.md` | Integration guide and public API notes. |
 | `docs/device-integration.md` | RP2040-oriented integration and profiling notes. |
