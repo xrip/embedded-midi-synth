@@ -113,6 +113,15 @@ as the engine — no define for 16-bit, `-DMIDI_SYNTH_MULAW` for the half-size �
 # ./build.ps1 -Target dls_pack -Define MIDI_SYNTH_MULAW   # µ-law packer -> v5 bank
 ```
 
+No compiler handy? Pack in the browser instead: open
+[`dls_pack.html`](https://xrip.github.io/embedded-midi-synth/dls_pack.html),
+drop in your `GM.DLS`, choose **16-bit (v4)** or **µ-law (v5)**, set the output
+rate, and download `gm_bank.bin`. It is a self-contained JavaScript port of
+`tools/dls_pack.c`, `tools/dls_parse.c.inl`, and `mulaw.h` that emits a
+byte-for-byte identical bank (verified against `build/dls_pack*.exe`). The file
+is processed locally in your browser — nothing is uploaded. Source:
+[`dls_pack.html`](dls_pack.html).
+
 Alternatively, pack a user-provided GUS patch set using a simple TiMidity config:
 
 ```powershell
